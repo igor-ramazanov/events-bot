@@ -12,7 +12,6 @@ import canoe.syntax._
 import cats.effect._
 import cats.effect.concurrent.MVar
 import cats.implicits._
-import org.http4s.client.JavaNetClientBuilder
 import org.slf4j.LoggerFactory
 import tech.igorramazanov.karpovkasmokebreakbot.Command.commandShow
 import tech.igorramazanov.karpovkasmokebreakbot.Utils._
@@ -56,12 +55,12 @@ object Main extends IOApp {
           // This is a non-deterministic choice and 2nd is chosen then the message won't have chanced to be processed
           // until receiving another message causing this shift one more time (still non-deterministic).
           Executors.newFixedThreadPool(
-            2,
+            1,
             threadFactory("cpu")
           )
         else
           Executors.newFixedThreadPool(
-            math.min(Runtime.getRuntime.availableProcessors(), 4),
+            Runtime.getRuntime.availableProcessors(),
             threadFactory("cpu")
           )
       )
@@ -94,6 +93,8 @@ object Main extends IOApp {
   val token: String = sys.env("SMOKE_BREAK_BOT_TELEGRAM_TOKEN")
   val zoneId: ZoneId = ZoneId.of(sys.env("SMOKE_BREAK_BOT_TIMEZONE"))
   val dataDir: String = sys.env("SMOKE_BREAK_BOT_DATA_DIR")
+  val hostname: String = sys.env("SMOKE_BREAK_BOT_HOSTNAME")
+  val port: Int = sys.env("SMOKE_BREAK_BOT_PORT").toInt
   val usersFile: String = dataDir + "/" + "users.txt"
   val rejectedUsersFile: String = dataDir + "/" + "rejected_users.txt"
   val stateFile: String = dataDir + "/" + "state.txt"
@@ -102,36 +103,36 @@ object Main extends IOApp {
   def validCommands: Expect[TextMessage] =
     textMessage.matching(Command.values.map(_.show).mkString("|"))
 
-  def run(args: List[String]): IO[ExitCode] = {
-    implicit val telegramClient = TelegramClient
-      .fromHttp4sClient[IO](token)(JavaNetClientBuilder[IO](blocker).create)
-    for {
-      _ <- IO(logger.info("Bot is starting"))
-      implicit0(storage: Storage[IO]) <-
-        Storage
-          .create[IO](
-            usersFile,
-            stateFile,
-            zoneId
-          )
-      state <- ioOp(storage.restoreState)
-      implicit0(smokeService: SmokeService[IO]) <-
-        SmokeService.create[IO](state, zoneId)
-      channel <- MVar.empty[IO, (Boolean, Int)]
-      fiber <-
-        Bot
-          .polling[IO]
-          .follow(
-            approvals(channel),
-            smokeBreak(channel)
-          )
-          .compile
-          .drain
-          .start
-      _ <- IO(logger.info("Bot started"))
-      _ <- fiber.join
-    } yield ExitCode.Success
-  }
+  def run(args: List[String]): IO[ExitCode] =
+    TelegramClient[IO](token, blocker.blockingContext).use {
+      implicit telegramClient =>
+        for {
+          _ <- IO(logger.info("Bot is starting"))
+          implicit0(storage: Storage[IO]) <-
+            Storage
+              .create[IO](
+                usersFile,
+                stateFile,
+                zoneId
+              )
+          state <- ioOp(storage.restoreState)
+          implicit0(smokeService: SmokeService[IO]) <-
+            SmokeService.create[IO](state, zoneId)
+          channel <- MVar.empty[IO, (Boolean, Int)]
+          fiber <-
+            Bot
+              .hook[IO](hostname, port)
+              .use { bot =>
+                bot
+                  .follow(approvals(channel), smokeBreak(channel))
+                  .compile
+                  .drain
+              }
+              .start
+          _ <- IO(logger.info("Bot started"))
+          _ <- fiber.join
+        } yield ExitCode.Success
+    }
 
   def approvals[F[_]: TelegramClient: MonadThrowable: Storage](
       channel: MVar[F, (Boolean, Int)]
