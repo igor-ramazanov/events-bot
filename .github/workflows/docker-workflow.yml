@@ -11,7 +11,7 @@ env:
 jobs:
   docker:
     name: Build and push a Docker image directly on the server
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Build and push a Docker image
         run: |
