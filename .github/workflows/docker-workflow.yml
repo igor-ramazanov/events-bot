@@ -1,4 +1,4 @@
-name: Build and push a Docker image directly on the server
+name: Build and push a Docker image directly from the server
 on:
   push:
     branches:
@@ -10,7 +10,7 @@ env:
 
 jobs:
   docker:
-    name: Build and push a Docker image directly on the server
+    name: Build and push a Docker image directly from the server
     runs-on: self-hosted
     steps:
       - name: Build and push a Docker image
