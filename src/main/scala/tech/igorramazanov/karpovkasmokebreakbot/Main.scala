@@ -6,7 +6,8 @@ import java.util.concurrent.atomic.AtomicInteger
 
 import canoe.api._
 import canoe.api.models.Keyboard
-import canoe.models.messages.TextMessage
+import canoe.methods.messages.ForwardMessage
+import canoe.models.messages.{TelegramMessage, TextMessage}
 import canoe.models.{KeyboardButton, ReplyKeyboardMarkup}
 import canoe.syntax._
 import cats.effect._
@@ -162,9 +163,12 @@ object Main extends IOApp {
 
   def smokeBreak[F[
       _
-  ]: TelegramClient: Timer: MonadThrowable: Storage: SmokeService: ContextShift](
+  ]: Timer: MonadThrowable: Storage: SmokeService: ContextShift](
       channel: MVar[F, (Boolean, Int)]
-  )(implicit blocker: Blocker): Scenario[F, Unit] =
+  )(implicit
+      telegramClient: TelegramClient[F],
+      blocker: Blocker
+  ): Scenario[F, Unit] =
     for {
       m <- Scenario.expect(validCommands)
       _ <- m.from.fold(Scenario.done[F]) { u =>
@@ -187,7 +191,8 @@ object Main extends IOApp {
                       List(
                         KeyboardButton.text("/join"),
                         KeyboardButton.text("/create"),
-                        KeyboardButton.text("/help")
+                        KeyboardButton.text("/help"),
+                        KeyboardButton.text("/feedback")
                       )
                     ),
                     resizeKeyboard = true.some
@@ -280,6 +285,25 @@ object Main extends IOApp {
                 _ <- Scenario.eval(
                   SmokeService[F].create(sender, hh, mm)
                 )
+              } yield ()
+            case Command.Feedback =>
+              for {
+                _ <- Scenario.eval(m.chat.send(Strings.Feedback))
+                feedback <- Scenario.expect(
+                  PartialFunction
+                    .fromFunction(identity[TelegramMessage])
+                )
+                adminChat <- Scenario.eval(Storage[F].adminChat)
+                _ <- Scenario.eval(
+                  telegramClient.execute(
+                    ForwardMessage(
+                      adminChat.id,
+                      feedback.chat.id,
+                      feedback.messageId
+                    )
+                  )
+                )
+                _ <- Scenario.eval(m.chat.send(Strings.FeedbackConfirmation))
               } yield ()
             case _ => Scenario.done[F]
           }
