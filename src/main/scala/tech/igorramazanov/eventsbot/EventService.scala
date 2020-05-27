@@ -22,6 +22,7 @@ import scala.util.chaining._
   def delete(user: User[F]): F[Unit]
   def create(
       user: User[F],
+      maybeDescription: Option[String],
       hh: Int,
       mm: Int
   ): F[Unit]
@@ -174,6 +175,7 @@ object EventService {
 
       def create(
           user: User[F],
+          maybeDescription: Option[String],
           hh: Int,
           mm: Int
       ): F[Unit] = {
@@ -184,8 +186,13 @@ object EventService {
             if (d.isBefore(now)) d.plusDays(1) else d
           }
           state <- ref.modify(prev =>
-            State(Map(user.id -> user), prev.all, date, past = false)
-              .pipe(s => (s, s))
+            State(
+              maybeDescription,
+              Map(user.id -> user),
+              prev.all,
+              date,
+              past = false
+            ).pipe(s => (s, s))
           )
           _ <- Storage[F].save(state)
           response <- schedule(ref, fibers, zoneId)

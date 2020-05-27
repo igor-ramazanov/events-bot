@@ -181,13 +181,15 @@ object Main extends IOApp {
                       List(
                         KeyboardButton.text("/show"),
                         KeyboardButton.text("/join"),
-                        KeyboardButton.text("/help"),
-                        KeyboardButton.text("/feedback")
+                        KeyboardButton.text("/help")
+                      ),
+                      List(
+                        KeyboardButton.text("/feedback"),
+                        KeyboardButton.text("/delete")
                       ),
                       List(
                         KeyboardButton.text("/leave"),
-                        KeyboardButton.text("/create"),
-                        KeyboardButton.text("/delete")
+                        KeyboardButton.text("/create")
                       )
                     ),
                     resizeKeyboard = true.some
@@ -272,6 +274,24 @@ object Main extends IOApp {
               Scenario.eval(EventService[F].join(sender))
             case Command.Create =>
               for {
+                _ <- Scenario.eval(
+                  m.chat.send(
+                    Strings.Description,
+                    keyboard = Keyboard.Reply(
+                      ReplyKeyboardMarkup.singleButton(
+                        KeyboardButton.text("/no_descriprion")
+                      )
+                    )
+                  )
+                )
+                maybeDescription <- Scenario.expect(
+                  text
+                    .andThen(_.trim)
+                    .andThen({
+                      case "/no_descriprion" => none[String]
+                      case s                 => s.some
+                    })
+                )
                 _ <- Scenario.eval(m.chat.send(Strings.When).attempt)
                 (hh, mm) <- Scenario.expect(
                   textMessage
@@ -284,8 +304,9 @@ object Main extends IOApp {
                     })
                 )
                 _ <- Scenario.eval(
-                  EventService[F].create(sender, hh, mm)
+                  EventService[F].create(sender, maybeDescription, hh, mm)
                 )
+                _ <- Scenario.eval(start)
               } yield ()
             case Command.Feedback =>
               for {

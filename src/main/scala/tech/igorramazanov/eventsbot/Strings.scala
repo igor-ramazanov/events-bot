@@ -9,9 +9,15 @@ object Strings {
     Show.show(state =>
       if (state.past)
         s"Она уже прошла :( Создашь новую? /create"
-      else
-        s"Время следующей встречи: ${state.when.show}. Участники: ${state.names
-          .mkString(", ")}"
+      else {
+        val when = state.when.show
+        val description =
+          state.description.fold("Встреча на свободную тему.")("Описание: " + _)
+        val participants = state.names.mkString(", ")
+        s"""|Время следующей встречи: $when.
+           |Участники: $participants.
+           |$description""".stripMargin
+      }
     )
 
   def Created[F[_]](creatingUser: String, state: State[F]): String =
@@ -39,7 +45,7 @@ object Strings {
        |/feedback - Оставить предложения об улучшении
        |""".stripMargin
   val Feedback: String =
-    "Благодарю за неравнодушие :) Можете начать писать сообщение, а бот переотправит его мне."
+    "Благодарю за неравнодушие :) Можешь начать писать сообщение, а бот переотправит его мне."
   val FeedbackConfirmation: String =
     "Спасибо вам! Я прочитаю и поразмышляю о ваших предложениях."
   val Deleted =
@@ -48,6 +54,8 @@ object Strings {
     "Отлично! Я напомню о встрече заранее за 5 минут и в момент ее начала. "
   val ShortConfirmation =
     "Отлично! Я напомню о встрече в момент его начала. "
+  val Description =
+    "По желанию можете ввести текстовое описание тематики будущей встречи.\nЛибо нажмите на кнопку внизу, если это встреча на свободную тему."
   val When =
     "Во сколько? Я понимаю следующий формат hh:mm, например 20:45 или 00:05."
   val Left =
@@ -59,8 +67,14 @@ object Strings {
     s"$joiningUserFullName решил(а) присоединиться к встрече. Участники: ${state.names.mkString(", ")}"
   val WhenRegex = "([01][0-9]|2[0-3]):([0-5][0-9])"
   val Reminder = "Встречаемся через 5 минут! "
-  def Start[F[_]](state: State[F]) =
-    s"""|Время встречи, встречаемся внизу.
+  def Start[F[_]](state: State[F]) = {
+    val participants = state.names.mkString(", ")
+    val description =
+      state.description.fold("Встреча на свободную тему.")("Описание: " + _)
+
+    s"""|Итак, время встречи, встречаемся у Карповского моста на перекрестке со стороны Петроградского острова.
        |И, ребята, я крайне рекомендую приходить в масках, чтобы минизировать вероятность заражения, пока люди все еще болеют коронавирусом.
-       |Участники: ${state.names.mkString(", ")}""".stripMargin
+       |Участники: $participants
+       |$description""".stripMargin
+  }
 }

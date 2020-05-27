@@ -196,6 +196,7 @@ object Storage {
               ).toOption
                 .getOrElse(
                   State(
+                    None,
                     Map.empty,
                     Nil,
                     ZonedDateTime.now(zoneId),

@@ -3,6 +3,7 @@ package tech.igorramazanov.eventsbot
 import java.time.ZonedDateTime
 
 final case class State[F[_]](
+    description: Option[String],
     participants: Map[Int, User[F]],
     all: List[User[F]],
     when: ZonedDateTime,
@@ -34,15 +35,17 @@ final case class State[F[_]](
 
 object State {
   def encode[F[_]](state: State[F]): String = {
+    val description = state.description.getOrElse("").filter(_ != '|').trim
     val ids = state.ids.mkString(",")
     val when = state.when.toString
     val past = state.past.toString
-    s"$ids|$when|$past"
+    s"$description|$ids|$when|$past"
   }
 
   def decode[F[_]](all: List[User[F]], s: String): State[F] = {
-    val Array(ids, when, past) = s.split('|')
+    val Array(description, ids, when, past) = s.split('|')
     State(
+      description = Option(description).filter(_.nonEmpty),
       participants = ids
         .split(',')
         .map(_.toInt)
