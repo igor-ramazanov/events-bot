@@ -1,4 +1,4 @@
-package tech.igorramazanov.karpovkasmokebreakbot
+package tech.igorramazanov.eventsbot
 
 sealed trait UserStatus extends Product with Serializable {
   def code: Int

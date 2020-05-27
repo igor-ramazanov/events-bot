@@ -1,4 +1,4 @@
-package tech.igorramazanov.karpovkasmokebreakbot
+package tech.igorramazanov.eventsbot
 
 import java.time.ZoneId
 
@@ -8,13 +8,13 @@ import cats.effect.concurrent._
 import cats.effect.implicits._
 import cats.implicits._
 import simulacrum.typeclass
-import tech.igorramazanov.karpovkasmokebreakbot.Utils._
-import tech.igorramazanov.karpovkasmokebreakbot.Strings.showState
+import tech.igorramazanov.eventsbot.Utils._
+import tech.igorramazanov.eventsbot.Strings.showState
 
 import scala.concurrent.duration._
 import scala.util.chaining._
 
-@typeclass trait SmokeService[F[_]] {
+@typeclass trait EventService[F[_]] {
   def save(user: User[F]): F[Unit]
   def show(user: User[F]): F[Unit]
   def join(user: User[F]): F[Unit]
@@ -27,7 +27,7 @@ import scala.util.chaining._
   ): F[Unit]
 }
 
-object SmokeService {
+object EventService {
 
   val remindingPeriod: FiniteDuration = 5.minutes
 
@@ -69,9 +69,7 @@ object SmokeService {
         )
         _ <- Storage[F].save(state)
         _ <- state.users.traverse(
-          _.callback(
-            Strings.Start + s"Участники: ${state.names.mkString(", ")}"
-          )
+          _.callback(Strings.Start[F](state))
         )
       } yield ()
       _ <- (for {
@@ -87,7 +85,7 @@ object SmokeService {
   def create[F[_]: Concurrent: Timer: Storage](
       state: State[F],
       zoneId: ZoneId
-  ): F[SmokeService[F]] =
+  ): F[EventService[F]] =
     for {
       now <- Timer[F].clock.now(zoneId)
       expired = now.isAfter(state.when)
@@ -112,7 +110,7 @@ object SmokeService {
                 ().pure[F]
             }.void
           }
-    } yield new SmokeService[F] {
+    } yield new EventService[F] {
 
       def save(user: User[F]): F[Unit] =
         ref.modify(_.save(user).pipe(s => (s, s))) >>= Storage[F].save

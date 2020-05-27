@@ -1,4 +1,4 @@
-package tech.igorramazanov.karpovkasmokebreakbot
+package tech.igorramazanov.eventsbot
 
 import java.time.ZonedDateTime
 

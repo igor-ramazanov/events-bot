@@ -1,4 +1,4 @@
-package tech.igorramazanov.karpovkasmokebreakbot
+package tech.igorramazanov.eventsbot
 
 final case class User[F[_]](
     id: Int,

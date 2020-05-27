@@ -1,4 +1,4 @@
-package tech.igorramazanov.karpovkasmokebreakbot
+package tech.igorramazanov.eventsbot
 
 import java.time.format.DateTimeFormatter
 import java.time.{Instant, LocalDateTime, ZoneId, ZonedDateTime}

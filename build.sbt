@@ -1,4 +1,4 @@
-name := "karpovka-smoke-break-bot"
+name := "events-bot"
 version := "0.1"
 organization := "igorramazanov.tech"
 maintainer := "Igor Ramazanov <igor.ramazanov@protonmail.com>"
@@ -25,8 +25,7 @@ addCompilerPlugin(
   ("org.typelevel" %% "kind-projector" % "0.11.0").cross(CrossVersion.full)
 )
 
-assembly / mainClass := Some("tech.igorramazanov.karpovkasmokebreakbot.Main")
-assembly / assemblyOutputPath := file("karpovka-smoke-break-bot.jar")
+assembly / mainClass := Some("tech.igorramazanov.eventsbot.Main")
 
 Global / cancelable := false
 

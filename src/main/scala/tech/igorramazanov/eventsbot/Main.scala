@@ -1,4 +1,4 @@
-package tech.igorramazanov.karpovkasmokebreakbot
+package tech.igorramazanov.eventsbot
 
 import java.time.ZoneId
 import java.util.concurrent._
@@ -14,9 +14,8 @@ import cats.effect._
 import cats.effect.concurrent.MVar
 import cats.implicits._
 import org.slf4j.LoggerFactory
-import tech.igorramazanov.karpovkasmokebreakbot.Command.commandShow
-import tech.igorramazanov.karpovkasmokebreakbot.Main.ioOp
-import tech.igorramazanov.karpovkasmokebreakbot.Utils._
+import tech.igorramazanov.eventsbot.Command.commandShow
+import tech.igorramazanov.eventsbot.Utils._
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
@@ -92,9 +91,9 @@ object Main extends IOApp {
 
   val logger = LoggerFactory.getLogger(getClass)
 
-  val token: String = sys.env("SMOKE_BREAK_BOT_TELEGRAM_TOKEN")
-  val zoneId: ZoneId = ZoneId.of(sys.env("SMOKE_BREAK_BOT_TIMEZONE"))
-  val dataDir: String = sys.env("SMOKE_BREAK_BOT_DATA_DIR")
+  val token: String = sys.env("EVENTS_BOT_TELEGRAM_TOKEN")
+  val zoneId: ZoneId = ZoneId.of(sys.env("EVENTS_BOT_TIMEZONE"))
+  val dataDir: String = sys.env("EVENTS_BOT_DATA_DIR")
   val usersFile: String = dataDir + "/" + "users.txt"
   val rejectedUsersFile: String = dataDir + "/" + "rejected_users.txt"
   val stateFile: String = dataDir + "/" + "state.txt"
@@ -116,13 +115,13 @@ object Main extends IOApp {
                 zoneId
               )
           state <- ioOp(storage.restoreState)
-          implicit0(smokeService: SmokeService[IO]) <-
-            SmokeService.create[IO](state, zoneId)
+          implicit0(eventService: EventService[IO]) <-
+            EventService.create[IO](state, zoneId)
           channel <- MVar.empty[IO, (Boolean, Int)]
           fiber <-
             Bot
               .polling[IO]
-              .follow(approvals(channel), smokeBreak(channel))
+              .follow(approvals(channel), handleUserCommands(channel))
               .compile
               .drain
               .start
@@ -157,9 +156,9 @@ object Main extends IOApp {
       _ <- Scenario.eval(channel.put((isApproved, id)))
     } yield ()
 
-  def smokeBreak[F[
+  def handleUserCommands[F[
       _
-  ]: Timer: MonadThrowable: Storage: SmokeService: ContextShift](
+  ]: Timer: MonadThrowable: Storage: EventService: ContextShift](
       channel: MVar[F, (Boolean, Int)]
   )(implicit
       telegramClient: TelegramClient[F],
@@ -236,12 +235,12 @@ object Main extends IOApp {
                           Storage[F].save(m.chat, u, UserStatus.SignedIn)
                         )
                         _ <-
-                          SmokeService[F]
+                          EventService[F]
                             .save(sender)
                         _ <-
                           m.chat
                             .send(Strings.SignedUp)
-                        _ <- SmokeService[F].show(sender)
+                        _ <- EventService[F].show(sender)
                         _ <- start
                       } yield ())
                     else
@@ -259,18 +258,18 @@ object Main extends IOApp {
             case Command.Start | Command.Help =>
               Scenario.eval(start)
             case Command.Show =>
-              Scenario.eval(SmokeService[F].show(sender))
+              Scenario.eval(EventService[F].show(sender))
             case Command.Leave =>
-              Scenario.eval(SmokeService[F].leave(sender))
+              Scenario.eval(EventService[F].leave(sender))
             case Command.Delete =>
               Scenario
                 .eval(
-                  SmokeService[F].delete(sender) >>
+                  EventService[F].delete(sender) >>
                     ioOp(Storage[F].delete(u)) >>
                     m.chat.send(Strings.Deleted).void
                 )
             case Command.Join =>
-              Scenario.eval(SmokeService[F].join(sender))
+              Scenario.eval(EventService[F].join(sender))
             case Command.Create =>
               for {
                 _ <- Scenario.eval(m.chat.send(Strings.When).attempt)
@@ -285,7 +284,7 @@ object Main extends IOApp {
                     })
                 )
                 _ <- Scenario.eval(
-                  SmokeService[F].create(sender, hh, mm)
+                  EventService[F].create(sender, hh, mm)
                 )
               } yield ()
             case Command.Feedback =>
