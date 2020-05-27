@@ -15,6 +15,7 @@ import cats.effect.concurrent.MVar
 import cats.implicits._
 import org.slf4j.LoggerFactory
 import tech.igorramazanov.karpovkasmokebreakbot.Command.commandShow
+import tech.igorramazanov.karpovkasmokebreakbot.Main.ioOp
 import tech.igorramazanov.karpovkasmokebreakbot.Utils._
 
 import scala.concurrent.ExecutionContext
@@ -180,14 +181,14 @@ object Main extends IOApp {
                     List(
                       List(
                         KeyboardButton.text("/show"),
-                        KeyboardButton.text("/leave"),
-                        KeyboardButton.text("/delete")
-                      ),
-                      List(
                         KeyboardButton.text("/join"),
-                        KeyboardButton.text("/create"),
                         KeyboardButton.text("/help"),
                         KeyboardButton.text("/feedback")
+                      ),
+                      List(
+                        KeyboardButton.text("/leave"),
+                        KeyboardButton.text("/create"),
+                        KeyboardButton.text("/delete")
                       )
                     ),
                     resizeKeyboard = true.some
@@ -230,13 +231,19 @@ object Main extends IOApp {
                   _ <- Scenario.eval(channel.take)
                   _ <-
                     if (signedUp)
-                      Scenario.eval(
-                        ioOp(
+                      Scenario.eval(for {
+                        _ <- ioOp(
                           Storage[F].save(m.chat, u, UserStatus.SignedIn)
-                        ) >> SmokeService[F]
-                          .save(sender) >> m.chat
-                          .send(Strings.SignedUp) >> start
-                      )
+                        )
+                        _ <-
+                          SmokeService[F]
+                            .save(sender)
+                        _ <-
+                          m.chat
+                            .send(Strings.SignedUp)
+                        _ <- SmokeService[F].show(sender)
+                        _ <- start
+                      } yield ())
                     else
                       Scenario.eval(
                         ioOp(
