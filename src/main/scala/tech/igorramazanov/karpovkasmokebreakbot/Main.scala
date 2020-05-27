@@ -94,8 +94,6 @@ object Main extends IOApp {
   val token: String = sys.env("SMOKE_BREAK_BOT_TELEGRAM_TOKEN")
   val zoneId: ZoneId = ZoneId.of(sys.env("SMOKE_BREAK_BOT_TIMEZONE"))
   val dataDir: String = sys.env("SMOKE_BREAK_BOT_DATA_DIR")
-  val hostname: String = sys.env("SMOKE_BREAK_BOT_HOSTNAME")
-  val port: Int = sys.env("SMOKE_BREAK_BOT_PORT").toInt
   val usersFile: String = dataDir + "/" + "users.txt"
   val rejectedUsersFile: String = dataDir + "/" + "rejected_users.txt"
   val stateFile: String = dataDir + "/" + "state.txt"
@@ -122,13 +120,10 @@ object Main extends IOApp {
           channel <- MVar.empty[IO, (Boolean, Int)]
           fiber <-
             Bot
-              .hook[IO](hostname, port)
-              .use { bot =>
-                bot
-                  .follow(approvals(channel), smokeBreak(channel))
-                  .compile
-                  .drain
-              }
+              .polling[IO]
+              .follow(approvals(channel), smokeBreak(channel))
+              .compile
+              .drain
               .start
           _ <- IO(logger.info("Bot started"))
           _ <- fiber.join
