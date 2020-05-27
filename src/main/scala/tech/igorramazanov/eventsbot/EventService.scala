@@ -144,7 +144,7 @@ object EventService {
 
       def leave(user: User[F]): F[Unit] =
         for {
-          (state, existed) <- ref.modify { state =>
+          (state, wantedToParticipate) <- ref.modify { state =>
             val exists = state.ids.toSet(user.id)
             val newState =
               if (exists)
@@ -154,16 +154,15 @@ object EventService {
             newState.pipe(s => (s, s -> exists))
           }
           _ <-
-            if (existed)
+            if (wantedToParticipate)
               if (state.past)
                 respond(user, state.show)
               else
-                respond(user, Strings.NotExisted)
+                Storage[F].save(state) >>
+                  respond(user, Strings.Left) >>
+                  notifyPeers(Strings.LeftNotifyPeers, user)
             else
-              Storage[F].save(state) >> respond(
-                user,
-                Strings.Left
-              ) >> notifyPeers(Strings.LeftNotifyPeers, user)
+              respond(user, Strings.NotExisted)
         } yield ()
 
       def delete(user: User[F]): F[Unit] =
