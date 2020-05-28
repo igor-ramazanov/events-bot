@@ -110,14 +110,16 @@ object Storage {
                       c.asJson.noSpaces + separator + u.asJson.noSpaces + separator + s.code
                   }
 
-                Files.write(
-                  usersPath,
-                  lines.asJava,
-                  utf8,
-                  StandardOpenOption.CREATE,
-                  StandardOpenOption.TRUNCATE_EXISTING,
-                  StandardOpenOption.WRITE
-                )
+                Files
+                  .write(
+                    usersPath,
+                    lines.asJava,
+                    utf8,
+                    StandardOpenOption.CREATE,
+                    StandardOpenOption.TRUNCATE_EXISTING,
+                    StandardOpenOption.WRITE
+                  )
+                  .discard()
               }
             }
           }
@@ -132,27 +134,31 @@ object Storage {
                   .toList
                   .filter(!_.contains(user.id.toString))
               ).toOption.getOrElse(List.empty)
-              Files.write(
-                usersPath,
-                filteredOutUsers.asJava,
-                utf8,
-                StandardOpenOption.CREATE,
-                StandardOpenOption.WRITE,
-                StandardOpenOption.TRUNCATE_EXISTING
-              )
+              Files
+                .write(
+                  usersPath,
+                  filteredOutUsers.asJava,
+                  utf8,
+                  StandardOpenOption.CREATE,
+                  StandardOpenOption.WRITE,
+                  StandardOpenOption.TRUNCATE_EXISTING
+                )
+                .discard()
             }
           }
 
         override def save(state: State[F]): F[Unit] =
           Sync[F].delay {
-            Files.write(
-              statePath,
-              List(State.encode(state)).asJava,
-              utf8,
-              StandardOpenOption.CREATE,
-              StandardOpenOption.WRITE,
-              StandardOpenOption.TRUNCATE_EXISTING
-            )
+            Files
+              .write(
+                statePath,
+                List(State.encode(state)).asJava,
+                utf8,
+                StandardOpenOption.CREATE,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.TRUNCATE_EXISTING
+              )
+              .discard()
           }
 
         override def restoreUsers: F[List[(Chat, models.User, UserStatus)]] =

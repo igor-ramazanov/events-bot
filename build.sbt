@@ -4,17 +4,8 @@ organization := "igorramazanov.tech"
 maintainer := "Igor Ramazanov <igor.ramazanov@protonmail.com>"
 
 scalaVersion := "2.13.2"
-scalacOptions ++= Seq(
-  "-Ymacro-annotations",
-  "-feature",
-  "-language:implicitConversions",
-  "-deprecation",
-  "-encoding",
-  "utf-8",
-  "-explaintypes",
-  "-unchecked",
-  "-Xfatal-warnings"
-)
+
+scalacOptions += "-Ymacro-annotations"
 
 enablePlugins(JavaAppPackaging)
 enablePlugins(AshScriptPlugin)
@@ -24,8 +15,6 @@ addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
 addCompilerPlugin(
   ("org.typelevel" %% "kind-projector" % "0.11.0").cross(CrossVersion.full)
 )
-
-assembly / mainClass := Some("tech.igorramazanov.eventsbot.Main")
 
 Global / cancelable := false
 

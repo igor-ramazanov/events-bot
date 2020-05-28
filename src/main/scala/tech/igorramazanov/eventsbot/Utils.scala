@@ -30,4 +30,11 @@ object Utils {
           .atZone(zoneId)
       }
   }
+
+  implicit class AnyOps[A](private val v: A) extends AnyVal {
+    @specialized def discard(): Unit = {
+      val _: Any = v
+      ()
+    }
+  }
 }
