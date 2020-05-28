@@ -1,0 +1,5 @@
+name: 'Build image'
+description: 'Offers ability to build an sbt project with Docker client'
+runs:
+  using: 'docker'
+  image: 'Dockerfile'

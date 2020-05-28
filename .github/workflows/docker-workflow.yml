@@ -1,0 +1,29 @@
+name: Build, publish, restart, cleanup Docker image/container
+on:
+  push:
+    branches:
+      - master
+
+env:
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
+jobs:
+  docker:
+    name: Build, publish, restart, cleanup Docker image/container
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Build Docker image
+        uses: ./.github/actions/sbt-docker
+      - name: Login to Docker Hub
+        run: docker login -u "$DOCKER_USERNAME" -p "$DOCKER_PASSWORD"
+      - name: Publish Docker image
+        run: docker push igorramazanov/events-bot:latest
+      - name: Restart the service
+        run: docker-compose up -d --force-recreate
+      - name: Cleanup leftover images with <none> tag
+        run: docker images | grep none | awk '{print $3}' | xargs -I _ docker rmi -f _
+      - name: Cleanup leftover action images
+        run: docker images | grep -E '[0-9a-z]{6}\s+[0-9a-z]{32}' | awk '{print $3}' | xargs -I _ docker rmi -f _
