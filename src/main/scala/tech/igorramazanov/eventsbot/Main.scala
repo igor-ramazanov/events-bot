@@ -8,6 +8,7 @@ import canoe.api._
 import canoe.api.models.Keyboard
 import canoe.methods.messages.ForwardMessage
 import canoe.models.messages.{TelegramMessage, TextMessage}
+import canoe.models.outgoing.LocationContent
 import canoe.models.{KeyboardButton, ReplyKeyboardMarkup}
 import canoe.syntax._
 import cats.effect._
@@ -29,13 +30,12 @@ object Main extends IOApp {
         val t = new Thread(r)
         t.setName(name + "-" + counter.getAndIncrement())
         t.setDaemon(false)
-        t.setUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler {
-          override def uncaughtException(t: Thread, e: Throwable): Unit =
-            Thread.getDefaultUncaughtExceptionHandler match {
-              case null => e.printStackTrace()
-              case h    => h.uncaughtException(Thread.currentThread(), e)
-            }
-        })
+        t.setUncaughtExceptionHandler((_: Thread, e: Throwable) =>
+          Thread.getDefaultUncaughtExceptionHandler match {
+            case null => e.printStackTrace()
+            case h    => h.uncaughtException(Thread.currentThread(), e)
+          }
+        )
         t
       }
     }
@@ -118,15 +118,15 @@ object Main extends IOApp {
           implicit0(eventService: EventService[IO]) <-
             EventService.create[IO](state, zoneId)
           channel <- MVar.empty[IO, (Boolean, Int)]
-          fiber <-
+          _ <-
             Bot
-              .polling[IO]
-              .follow(approvals(channel), handleUserCommands(channel))
-              .compile
-              .drain
-              .start
-          _ <- IO(logger.info("Bot started"))
-          _ <- fiber.join
+              .hook("https://igorramazanov.tech/events-bot", port = 8080)
+              .use(
+                _.follow(
+                  approvals(channel),
+                  handleUserCommands(channel)
+                ).compile.drain
+              )
         } yield ExitCode.Success
     }
 
@@ -168,7 +168,13 @@ object Main extends IOApp {
       m <- Scenario.expect(validCommands)
       _ <- m.from.fold(Scenario.done[F]) { u =>
         val sender =
-          User[F](u.id, u.fullName, s => m.chat.send(s).attempt.void)
+          User[F](
+            u.id,
+            u.fullName,
+            str => m.chat.send(str).attempt.void,
+            (longitude, latitude) =>
+              m.chat.send(LocationContent(latitude, longitude)).void
+          )
         for {
           status <- Scenario.eval(Storage[F].status(u))
           start =
@@ -274,6 +280,17 @@ object Main extends IOApp {
               Scenario.eval(EventService[F].join(sender))
             case Command.Create =>
               for {
+                _ <- Scenario.eval(m.chat.send(Strings.When).attempt)
+                (hh, mm) <- Scenario.expect(
+                  textMessage
+                    .matching(Strings.WhenRegex)
+                    .andThen(_.text.pipe { text =>
+                      val s"$hh:$mm" = text
+                      val hours = hh.toInt
+                      val minutes = mm.toInt
+                      (hours, minutes)
+                    })
+                )
                 _ <- Scenario.eval(
                   m.chat.send(
                     Strings.Description,
@@ -292,19 +309,18 @@ object Main extends IOApp {
                       case s                 => s.some
                     })
                 )
-                _ <- Scenario.eval(m.chat.send(Strings.When).attempt)
-                (hh, mm) <- Scenario.expect(
-                  textMessage
-                    .matching(Strings.WhenRegex)
-                    .andThen(_.text.pipe { text =>
-                      val s"$hh:$mm" = text
-                      val hours = hh.toInt
-                      val minutes = mm.toInt
-                      (hours, minutes)
-                    })
-                )
+                _ <- Scenario.eval(m.chat.send(Strings.Where).attempt)
+                place <- Scenario.expect(location)
                 _ <- Scenario.eval(
-                  EventService[F].create(sender, maybeDescription, hh, mm)
+                  EventService[F]
+                    .create(
+                      sender,
+                      maybeDescription,
+                      hh,
+                      mm,
+                      place.longitude,
+                      place.latitude
+                    )
                 )
                 _ <- Scenario.eval(start)
               } yield ()

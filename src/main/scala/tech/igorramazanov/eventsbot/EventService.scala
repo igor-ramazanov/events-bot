@@ -24,7 +24,9 @@ import scala.util.chaining._
       user: User[F],
       maybeDescription: Option[String],
       hh: Int,
-      mm: Int
+      mm: Int,
+      longitude: Double,
+      latitude: Double
   ): F[Unit]
 }
 
@@ -58,7 +60,7 @@ object EventService {
         _ <- Timer[F].sleep(remindingDelay)
         state <- ref.get
         _ <- state.users.traverse(
-          _.callback(
+          _.sendString(
             Strings.Reminder
           )
         )
@@ -69,8 +71,9 @@ object EventService {
           _.copy(past = true).pipe(s => (s, s))
         )
         _ <- Storage[F].save(state)
-        _ <- state.users.traverse(
-          _.callback(Strings.Start[F](state))
+        _ <- state.users.traverse(u =>
+          u.sendString(Strings.Start[F](state)) >> u
+            .sendLocation(state.longitude, state.latitude)
         )
       } yield ()
       _ <- (for {
@@ -81,7 +84,8 @@ object EventService {
           _ <- prevFibers.traverse(_.cancel.attempt)
         } yield ()).whenA(!state.past)
     } yield
-      if (withReminder) Strings.FullConfirmation else Strings.ShortConfirmation
+      (if (withReminder) Strings.FullConfirmation
+       else Strings.ShortConfirmation) + "\n"
 
   def create[F[_]: Concurrent: Timer: Storage](
       state: State[F],
@@ -97,16 +101,19 @@ object EventService {
       _ <- schedule(ref, fibers, zoneId)
       respond =
         (u: User[F], s: String) =>
-          ref.get.map(state =>
-            if (state.past) state.show else s + state.show
-          ) >>= u.callback
+          ref.get.flatMap(state =>
+            if (state.past) u.sendString(state.show)
+            else
+              u.sendString(s + state.show) >> u
+                .sendLocation(state.longitude, state.latitude)
+          )
       notifyPeers =
         (buildMessage: (String, State[F]) => String, originator: User[F]) =>
           ref.get >>= { state =>
             state.all.traverse { peer =>
               if (peer.id != originator.id) {
                 val message = buildMessage(originator.fullName, state)
-                peer.callback(message)
+                peer.sendString(message)
               } else
                 ().pure[F]
             }.void
@@ -176,7 +183,9 @@ object EventService {
           user: User[F],
           maybeDescription: Option[String],
           hh: Int,
-          mm: Int
+          mm: Int,
+          longitude: Double,
+          latitude: Double
       ): F[Unit] = {
         val run = for {
           now <- Timer[F].clock.now(zoneId)
@@ -187,6 +196,8 @@ object EventService {
           state <- ref.modify(prev =>
             State(
               maybeDescription,
+              longitude,
+              latitude,
               Map(user.id -> user),
               prev.all,
               date,

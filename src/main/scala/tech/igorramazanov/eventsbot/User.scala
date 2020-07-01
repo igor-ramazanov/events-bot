@@ -3,5 +3,6 @@ package tech.igorramazanov.eventsbot
 final case class User[F[_]](
     id: Int,
     fullName: String,
-    callback: String => F[Unit]
+    sendString: String => F[Unit],
+    sendLocation: (Double, Double) => F[Unit]
 )

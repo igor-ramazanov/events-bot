@@ -4,6 +4,8 @@ import java.time.ZonedDateTime
 
 final case class State[F[_]](
     description: Option[String],
+    longitude: Double,
+    latitude: Double,
     participants: Map[Int, User[F]],
     all: List[User[F]],
     when: ZonedDateTime,
@@ -36,16 +38,20 @@ final case class State[F[_]](
 object State {
   def encode[F[_]](state: State[F]): String = {
     val description = state.description.getOrElse("").filter(_ != '|').trim
+    val longitude = state.longitude.toString
+    val latitude = state.latitude.toString
     val ids = state.ids.mkString(",")
     val when = state.when.toString
     val past = state.past.toString
-    s"$description|$ids|$when|$past"
+    s"$description|$longitude|$latitude|$ids|$when|$past"
   }
 
   def decode[F[_]](all: List[User[F]], s: String): State[F] = {
-    val Array(description, ids, when, past) = s.split('|')
+    val Array(description, longitude, latitude, ids, when, past) = s.split('|')
     State(
       description = Option(description).filter(_.nonEmpty),
+      longitude = longitude.toDouble,
+      latitude = latitude.toDouble,
       participants = ids
         .split(',')
         .map(_.toInt)

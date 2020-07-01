@@ -12,6 +12,7 @@ import cats.effect.Sync
 import cats.implicits._
 import simulacrum.typeclass
 import Utils._
+import canoe.models.outgoing.LocationContent
 
 import scala.util.Try
 import scala.util.chaining._
@@ -190,7 +191,13 @@ object Storage {
         override def restoreState: F[State[F]] =
           restoreUsers.map(_.flatMap {
             case (chat, user, UserStatus.SignedIn) =>
-              User[F](user.id, user.fullName, s => chat.send(s).void).some
+              User[F](
+                user.id,
+                user.fullName,
+                str => chat.send(str).void,
+                (longitude, latitude) =>
+                  chat.send(LocationContent(latitude, longitude)).void
+              ).some
             case _ => None
           }) >>= { users =>
             Sync[F].delay {
@@ -203,6 +210,8 @@ object Storage {
                 .getOrElse(
                   State(
                     None,
+                    0.0,
+                    0.0,
                     Map.empty,
                     Nil,
                     ZonedDateTime.now(zoneId),
