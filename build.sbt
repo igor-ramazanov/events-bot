@@ -3,7 +3,7 @@ version := "0.1"
 organization := "igorramazanov.tech"
 maintainer := "Igor Ramazanov <igor.ramazanov@protonmail.com>"
 
-scalaVersion := "2.13.2"
+scalaVersion := "2.13.3"
 
 scalacOptions += "-Ymacro-annotations"
 

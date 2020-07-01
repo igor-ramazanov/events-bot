@@ -197,7 +197,7 @@ object Storage {
               Try(
                 State.decode[F](
                   users,
-                  Files.readString(statePath)
+                  Files.readAllLines(statePath).get(0)
                 )
               ).toOption
                 .getOrElse(
