@@ -102,7 +102,11 @@ object Main extends IOApp {
   def validCommands: Expect[TextMessage] =
     textMessage.matching(Command.values.map(_.show).mkString("|"))
 
-  def run(args: List[String]): IO[ExitCode] =
+  def run(args: List[String]): IO[ExitCode] = {
+    sys.env
+      .get("LOG_LEVEL")
+      .foreach(level => sys.props.update("rootLevel", level))
+
     TelegramClient[IO](token, blocker.blockingContext).use {
       implicit telegramClient =>
         for {
@@ -129,6 +133,7 @@ object Main extends IOApp {
               )
         } yield ExitCode.Success
     }
+  }
 
   def approvals[F[_]: TelegramClient: MonadThrowable: Storage](
       channel: MVar[F, (Boolean, Int)]
