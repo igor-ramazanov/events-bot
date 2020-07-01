@@ -24,4 +24,5 @@ libraryDependencies += "ch.qos.logback" % "logback-classic" % "1.2.3"
 
 dockerUsername := Some("igorramazanov")
 dockerUpdateLatest := true
+dockerExposedPorts := Seq(8443)
 dockerBaseImage := "openjdk:14-alpine"
