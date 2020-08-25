@@ -20,7 +20,7 @@ Global / cancelable := false
 
 libraryDependencies += "org.typelevel" %% "simulacrum" % "1.0.0"
 libraryDependencies += "ch.qos.logback" % "logback-classic" % "1.2.3"
-libraryDependencies += "org.augustjune" %% "canoe" % "0.5.0-RC1"
+
 libraryDependencies += "co.fs2" % "fs2-core_2.13" % "2.2.2"
 libraryDependencies += "co.fs2" % "fs2-io_2.13" % "2.2.1"
 libraryDependencies += "com.chuusai" % "shapeless_2.13" % "2.3.3"
