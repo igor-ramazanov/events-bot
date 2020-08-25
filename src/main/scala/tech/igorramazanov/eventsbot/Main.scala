@@ -5,16 +5,16 @@ import java.util.concurrent._
 import java.util.concurrent.atomic.AtomicInteger
 
 import canoe.api._
+import canoe.syntax._
 import canoe.api.models.Keyboard
 import canoe.methods.messages.ForwardMessage
 import canoe.models.messages.{TelegramMessage, TextMessage}
 import canoe.models.outgoing.LocationContent
 import canoe.models.{KeyboardButton, ReplyKeyboardMarkup}
-import canoe.syntax._
 import cats.effect._
 import cats.effect.concurrent.MVar
 import cats.implicits._
-import org.slf4j.LoggerFactory
+import org.slf4j.{Logger, LoggerFactory}
 import tech.igorramazanov.eventsbot.Command.commandShow
 import tech.igorramazanov.eventsbot.Utils._
 
@@ -23,7 +23,7 @@ import scala.concurrent.duration._
 import scala.util.chaining._
 
 object Main extends IOApp {
-  def threadFactory(name: String) = {
+  def threadFactory(name: String): ThreadFactory = {
     val counter = new AtomicInteger(0)
     new ThreadFactory {
       override def newThread(r: Runnable): Thread = {
@@ -89,7 +89,7 @@ object Main extends IOApp {
       Executors.newSingleThreadScheduledExecutor(threadFactory("scheduler"))
     )
 
-  val logger = LoggerFactory.getLogger(getClass)
+  val logger: Logger = LoggerFactory.getLogger(getClass)
 
   val token: String = sys.env("EVENTS_BOT_TELEGRAM_TOKEN")
   val zoneId: ZoneId = ZoneId.of(sys.env("EVENTS_BOT_TIMEZONE"))
@@ -97,7 +97,7 @@ object Main extends IOApp {
   val usersFile: String = dataDir + "/" + "users.txt"
   val rejectedUsersFile: String = dataDir + "/" + "rejected_users.txt"
   val stateFile: String = dataDir + "/" + "state.txt"
-  val pollingPeriod = 1.second
+  val pollingPeriod: FiniteDuration = 1.second
 
   def validCommands: Expect[TextMessage] =
     textMessage.matching(Command.values.map(_.show).mkString("|"))
@@ -130,11 +130,11 @@ object Main extends IOApp {
         } yield ExitCode.Success
     }
 
-  def approvals[F[_]: TelegramClient: MonadThrowable: Storage](
+  def approvals[F[_]: TelegramClient: MonadThrowable: Storage: ContextShift](
       channel: MVar[F, (Boolean, Int)]
   ): Scenario[F, Unit] =
     for {
-      adminId <- Scenario.eval(Storage[F].adminId)
+      adminId <- Scenario.eval(ioOp(Storage[F].adminId))
       (isApproved, id) <- Scenario.expect(
         textMessage
           .matching("(\\/yes_[0-9]+)|(\\/no_[0-9]+)")
@@ -176,7 +176,11 @@ object Main extends IOApp {
               m.chat.send(LocationContent(latitude, longitude)).void
           )
         for {
-          status <- Scenario.eval(Storage[F].status(u))
+          status <- Scenario.eval(ioOp(Storage[F].status(u)))
+          isAdmin <-
+            Scenario
+              .eval(ioOp(Storage[F].adminId))
+              .map(adminId => sender.id === adminId)
           start =
             m.chat
               .send(
@@ -185,18 +189,21 @@ object Main extends IOApp {
                   ReplyKeyboardMarkup(
                     List(
                       List(
-                        KeyboardButton.text("/show"),
-                        KeyboardButton.text("/join"),
-                        KeyboardButton.text("/help")
+                        KeyboardButton.text(Command.Show.show),
+                        KeyboardButton.text(Command.Join.show),
+                        KeyboardButton.text(Command.Help.show)
                       ),
                       List(
-                        KeyboardButton.text("/feedback"),
-                        KeyboardButton.text("/delete")
+                        KeyboardButton.text(Command.Feedback.show),
+                        KeyboardButton.text(Command.Delete.show),
+                        KeyboardButton.text(Command.Garden.show)
                       ),
                       List(
-                        KeyboardButton.text("/leave"),
-                        KeyboardButton.text("/create")
-                      )
+                        KeyboardButton.text(Command.Leave.show),
+                        KeyboardButton.text(Command.Create.show)
+                      ) ++ (if (isAdmin)
+                              List(KeyboardButton.text(Command.News.show))
+                            else Nil)
                     ),
                     resizeKeyboard = true.some
                   )
@@ -219,8 +226,10 @@ object Main extends IOApp {
                           resizeKeyboard = true.some
                         )
                       )
-                    ) >> Storage[F]
-                      .save(m.chat, u, UserStatus.WaitingConfirmation)
+                    ) >> ioOp(
+                      Storage[F]
+                        .save(m.chat, u, UserStatus.WaitingConfirmation)
+                    )
                   )
               case UserStatus.WaitingConfirmation
                   if Command
@@ -263,21 +272,62 @@ object Main extends IOApp {
           }
 
           program = Command.withName(m.text.tail.capitalize) match {
-            case Command.Start | Command.Help =>
-              Scenario.eval(start)
             case Command.Show =>
               Scenario.eval(EventService[F].show(sender))
-            case Command.Leave =>
-              Scenario.eval(EventService[F].leave(sender))
+            case Command.Join =>
+              Scenario.eval(EventService[F].join(sender))
+            case Command.Start | Command.Help =>
+              Scenario.eval(start)
+            case Command.Feedback =>
+              for {
+                _ <- Scenario.eval(m.chat.send(Strings.Feedback))
+                feedback <- Scenario.expect(
+                  PartialFunction
+                    .fromFunction(identity[TelegramMessage])
+                )
+                adminChat <- Scenario.eval(ioOp(Storage[F].adminChat))
+                _ <- Scenario.eval(
+                  telegramClient.execute(
+                    ForwardMessage(
+                      adminChat.id,
+                      feedback.chat.id,
+                      feedback.messageId
+                    )
+                  )
+                )
+                _ <- Scenario.eval(m.chat.send(Strings.FeedbackConfirmation))
+              } yield ()
             case Command.Delete =>
               Scenario
                 .eval(
                   EventService[F].delete(sender) >>
-                    ioOp(Storage[F].delete(u)) >>
+                    ioOp(ioOp(Storage[F].delete(u))) >>
                     m.chat.send(Strings.Deleted).void
                 )
-            case Command.Join =>
-              Scenario.eval(EventService[F].join(sender))
+            case Command.Garden =>
+              for {
+                _ <- Scenario.eval(
+                  m.chat
+                    .send(
+                      Strings.GardenerNewcomer,
+                      keyboard = Keyboard.Reply(
+                        ReplyKeyboardMarkup(
+                          List(
+                            List(
+                              KeyboardButton.text(Command.Persistent.show),
+                              KeyboardButton.text(Command.Now.show),
+                              KeyboardButton.text(Command.Start.show)
+                            )
+                          ),
+                          resizeKeyboard = true.some
+                        )
+                      )
+                    )
+                    .attempt
+                )
+              } yield ()
+            case Command.Leave =>
+              Scenario.eval(EventService[F].leave(sender))
             case Command.Create =>
               for {
                 _ <- Scenario.eval(m.chat.send(Strings.When).attempt)
@@ -324,24 +374,27 @@ object Main extends IOApp {
                 )
                 _ <- Scenario.eval(start)
               } yield ()
-            case Command.Feedback =>
+            case Command.News if isAdmin =>
               for {
-                _ <- Scenario.eval(m.chat.send(Strings.Feedback))
-                feedback <- Scenario.expect(
-                  PartialFunction
-                    .fromFunction(identity[TelegramMessage])
-                )
-                adminChat <- Scenario.eval(Storage[F].adminChat)
                 _ <- Scenario.eval(
-                  telegramClient.execute(
-                    ForwardMessage(
-                      adminChat.id,
-                      feedback.chat.id,
-                      feedback.messageId
+                  m.chat.send(
+                    Strings.PrepareNews,
+                    keyboard = Keyboard.Reply(
+                      ReplyKeyboardMarkup(
+                        List(
+                          List(
+                            KeyboardButton
+                              .text(Command.Start.show)
+                          )
+                        )
+                      )
                     )
                   )
                 )
-                _ <- Scenario.eval(m.chat.send(Strings.FeedbackConfirmation))
+                t <- Scenario.expect(text)
+                _ <-
+                  Scenario
+                    .eval(EventService[F].post(t))
               } yield ()
             case _ => Scenario.done[F]
           }
@@ -350,6 +403,7 @@ object Main extends IOApp {
             case UserStatus.SignedIn | UserStatus.Admin          => program
             case UserStatus.Rejected =>
               Scenario.eval(m.chat.send(Strings.Rejected).void)
+            case _ => Scenario.done[F]
           }
         } yield ()
       }

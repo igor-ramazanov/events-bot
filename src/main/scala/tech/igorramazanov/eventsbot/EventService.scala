@@ -2,6 +2,7 @@ package tech.igorramazanov.eventsbot
 
 import java.time.ZoneId
 
+import canoe.api.TelegramClient
 import cats._
 import cats.effect._
 import cats.effect.concurrent._
@@ -28,6 +29,7 @@ import scala.util.chaining._
       longitude: Double,
       latitude: Double
   ): F[Unit]
+  def post(news: String): F[Unit]
 }
 
 object EventService {
@@ -87,7 +89,7 @@ object EventService {
       (if (withReminder) Strings.FullConfirmation
        else Strings.ShortConfirmation) + "\n"
 
-  def create[F[_]: Concurrent: Timer: Storage](
+  def create[F[_]: Concurrent: Timer: Storage: TelegramClient](
       state: State[F],
       zoneId: ZoneId
   ): F[EventService[F]] =
@@ -209,6 +211,21 @@ object EventService {
           _ <- notifyPeers(Strings.Created, user)
         } yield response
         run >>= (r => respond(user, r))
+      }
+
+      def post(news: String): F[Unit] = {
+        import canoe.syntax._
+        import canoe.api._
+        for {
+          users <- Storage[F].restoreUsers
+          // TODO: Sometimes fails for unknown reasons
+          _ <- users.traverse {
+            case (c, _, _) =>
+              c.send(news)
+                .attempt
+                .map(_.fold(e => println(e.getMessage), _ => ()))
+          }.void
+        } yield ()
       }
     }
 }

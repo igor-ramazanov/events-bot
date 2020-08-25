@@ -19,6 +19,9 @@ object UserStatus {
   final case object Admin extends UserStatus {
     val code = 4
   }
+  final case object PersistentGardener extends UserStatus {
+    val code = 5
+  }
 
   def apply(code: Int): Option[UserStatus] =
     code match {
@@ -27,6 +30,7 @@ object UserStatus {
       case 2 => Some(WaitingConfirmation)
       case 3 => Some(Rejected)
       case 4 => Some(Admin)
+      case 5 => Some(PersistentGardener)
       case _ => None
     }
 }
