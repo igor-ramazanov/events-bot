@@ -4,7 +4,7 @@ import java.time.{Instant, LocalDateTime, ZoneId, ZonedDateTime}
 
 import canoe.api.models.ChatApi
 import canoe.models.PrivateChat
-import cats.effect.Clock
+import cats.effect.{Blocker, Clock, ContextShift}
 import cats.syntax.functor._
 import cats.{Functor, MonadError}
 
@@ -30,4 +30,9 @@ object Utils {
     new ChatApi(
       PrivateChat(u.id.toLong, Option(u.username), Option(u.firstName), None)
     )
+
+  def ioOp[F[_]: ContextShift, A](
+      fa: F[A]
+  )(implicit blocker: Blocker): F[A] =
+    ContextShift[F].blockOn(blocker)(fa)
 }
