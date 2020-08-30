@@ -2,7 +2,9 @@ package tech.igorramazanov.eventsbot
 
 import java.time.ZoneId
 
-import canoe.api.TelegramClient
+import canoe.api._
+import canoe.syntax._
+import canoe.models.outgoing.LocationContent
 import cats._
 import cats.effect._
 import cats.effect.concurrent._
@@ -10,19 +12,21 @@ import cats.effect.implicits._
 import cats.implicits._
 import simulacrum.typeclass
 import tech.igorramazanov.eventsbot.Utils._
-import tech.igorramazanov.eventsbot.Strings.showState
+import tech.igorramazanov.eventsbot.i18n.Language
+import tech.igorramazanov.eventsbot.model._
+import tech.igorramazanov.eventsbot.storage._
 
 import scala.concurrent.duration._
 import scala.util.chaining._
 
 @typeclass trait EventService[F[_]] {
-  def save(user: User[F]): F[Unit]
-  def show(user: User[F]): F[Unit]
-  def join(user: User[F]): F[Unit]
-  def leave(user: User[F]): F[Unit]
-  def delete(user: User[F]): F[Unit]
+  def save(user: User): F[Unit]
+  def show(user: User): F[Unit]
+  def join(user: User): F[Unit]
+  def leave(user: User): F[Unit]
+  def delete(user: User): F[Unit]
   def create(
-      user: User[F],
+      user: User,
       maybeDescription: Option[String],
       hh: Int,
       mm: Int,
@@ -37,7 +41,7 @@ object EventService {
   val remindingPeriod: FiniteDuration = 5.minutes
 
   def delays[F[_]: Timer: Monad](
-      state: State[F],
+      state: State,
       zoneId: ZoneId
   ): F[(FiniteDuration, FiniteDuration, Boolean)] =
     for {
@@ -50,32 +54,27 @@ object EventService {
       remindingDelay >= Duration.Zero
     )
 
-  def schedule[F[_]: Concurrent: Timer: Storage](
-      ref: Ref[F, State[F]],
+  def schedule[F[_]: Concurrent: Timer: Storage: TelegramClient](
       fibers: Ref[F, List[Fiber[F, Unit]]],
-      zoneId: ZoneId
+      zoneId: ZoneId,
+      language: Language
   ): F[String] =
     for {
-      state <- ref.get
+      state <- Storage[F].state
       (remindingDelay, notificationDelay, withReminder) <- delays(state, zoneId)
       remind = for {
         _ <- Timer[F].sleep(remindingDelay)
-        state <- ref.get
-        _ <- state.users.traverse(
-          _.sendString(
-            Strings.Reminder
-          )
-        )
+        ps <- Storage[F].participants
+        _ <- ps.traverse(_.send(language.reminder))
       } yield ()
       notify = for {
         _ <- Timer[F].sleep(notificationDelay)
-        state <- ref.modify(
-          _.copy(past = true).pipe(s => (s, s))
-        )
-        _ <- Storage[F].save(state)
-        _ <- state.users.traverse(u =>
-          u.sendString(Strings.Start[F](state)) >> u
-            .sendLocation(state.longitude, state.latitude)
+        pastState = state.copy(past = true)
+        _ <- Storage[F].save(pastState)
+        ps <- Storage[F].participants
+        _ <- ps.traverse(u =>
+          u.send(language.start(pastState, ps)) >>
+            u.send(LocationContent(pastState.latitude, pastState.longitude))
         )
       } yield ()
       _ <- (for {
@@ -86,103 +85,92 @@ object EventService {
           _ <- prevFibers.traverse(_.cancel.attempt)
         } yield ()).whenA(!state.past)
     } yield
-      (if (withReminder) Strings.FullConfirmation
-       else Strings.ShortConfirmation) + "\n"
+      (if (withReminder) language.schedulingConfirmationFull
+       else language.schedulingConfirmationShort) + "\n"
 
   def create[F[_]: Concurrent: Timer: Storage: TelegramClient](
-      state: State[F],
-      zoneId: ZoneId
+      state: State,
+      zoneId: ZoneId,
+      language: Language
   ): F[EventService[F]] =
     for {
       now <- Timer[F].clock.now(zoneId)
       expired = now.isAfter(state.when)
       _ <- Storage[F].save(state.copy(past = true)).whenA(expired)
-      ref <-
-        Ref.of[F, State[F]](if (expired) state.copy(past = true) else state)
       fibers <- Ref.of[F, List[Fiber[F, Unit]]](Nil)
-      _ <- schedule(ref, fibers, zoneId)
+      _ <- schedule(fibers, zoneId, language)
       respond =
-        (u: User[F], s: String) =>
-          ref.get.flatMap(state =>
-            if (state.past) u.sendString(state.show)
-            else
-              u.sendString(s + state.show) >> u
-                .sendLocation(state.longitude, state.latitude)
-          )
+        (u: User, s: String) =>
+          for {
+            ps <- Storage[F].participants
+            state <- Storage[F].state
+            _ <-
+              if (state.past) u.send(language.state(state, ps)).void
+              else
+                u.send(s + language.state(state, ps)) >>
+                  u.send(LocationContent(state.latitude, state.longitude)).void
+          } yield ()
       notifyPeers =
-        (buildMessage: (String, State[F]) => String, originator: User[F]) =>
-          ref.get >>= { state =>
-            state.all.traverse { peer =>
+        (buildMessage: (String, List[User]) => String, originator: User) => {
+          for {
+            users <- Storage[F].users
+            ps <- Storage[F].participants
+            _ <- users.traverse { peer =>
               if (peer.id != originator.id) {
-                val message = buildMessage(originator.fullName, state)
-                peer.sendString(message)
+                val message = buildMessage(originator.username, ps)
+                peer.send(message).void
               } else
                 ().pure[F]
-            }.void
-          }
+            }
+          } yield ()
+        }
     } yield new EventService[F] {
 
-      def save(user: User[F]): F[Unit] =
-        ref.modify(_.save(user).pipe(s => (s, s))) >>= Storage[F].save
+      def save(user: User): F[Unit] = Storage[F].join(user.id)
 
-      def show(user: User[F]): F[Unit] =
+      def show(user: User): F[Unit] =
         respond(user, "")
 
-      def join(user: User[F]): F[Unit] =
+      def join(user: User): F[Unit] =
         for {
-          state <- ref.modify { state =>
-            val newState =
-              if (state.past)
-                state
-              else
-                state.add(user)
-            (newState, newState)
-          }
-          _ <- Storage[F].save(state)
+          state <- Storage[F].state
+          _ <- Storage[F].join(user.id).whenA(!state.past)
+          ps <- Storage[F].participants
           (_, _, withReminder) <- delays(state, zoneId)
           _ <-
             if (state.past)
-              respond(user, state.show)
+              respond(user, language.state(state, ps))
             else
               respond(
                 user,
-                if (withReminder) Strings.FullConfirmation
-                else Strings.ShortConfirmation
-              ) >> notifyPeers(Strings.JoinedNotifyPeers, user)
+                if (withReminder) language.schedulingConfirmationFull
+                else language.schedulingConfirmationShort
+              ) >> notifyPeers(language.notifyJoining, user)
         } yield ()
 
-      def leave(user: User[F]): F[Unit] =
+      def leave(user: User): F[Unit] =
         for {
-          (state, wantedToParticipate) <- ref.modify { state =>
-            val exists = state.ids.toSet(user.id)
-            val newState =
-              if (exists)
-                state.deleteParticipant(user)
-              else
-                state
-            newState.pipe(s => (s, s -> exists))
-          }
+          ps <- Storage[F].participants
+          state <- Storage[F].state
+          exists = ps.map(_.id).toSet(user.id)
+          _ <- Storage[F].leave(user.id)
+          ps <- Storage[F].participants
           _ <-
-            if (wantedToParticipate)
+            if (exists)
               if (state.past)
-                respond(user, state.show)
+                respond(user, language.state(state, ps))
               else
                 Storage[F].save(state) >>
-                  respond(user, Strings.Left) >>
-                  notifyPeers(Strings.LeftNotifyPeers, user)
+                  respond(user, language.left) >>
+                  notifyPeers(language.notifyLeaving, user)
             else
-              respond(user, Strings.NotExisted)
+              respond(user, language.didNotExist)
         } yield ()
 
-      def delete(user: User[F]): F[Unit] =
-        for {
-          state <-
-            ref.modify(_.deleteCompletely(user).pipe(_.pipe(s => (s, s))))
-          _ <- Storage[F].save(state)
-        } yield ()
+      def delete(user: User): F[Unit] = Storage[F].delete(user.id)
 
       def create(
-          user: User[F],
+          user: User,
           maybeDescription: Option[String],
           hh: Int,
           mm: Int,
@@ -195,37 +183,44 @@ object EventService {
             // Potential midnight shift
             if (d.isBefore(now)) d.plusDays(1) else d
           }
-          state <- ref.modify(prev =>
-            State(
-              maybeDescription,
-              longitude,
-              latitude,
-              Map(user.id -> user),
-              prev.all,
-              date,
-              past = false
-            ).pipe(s => (s, s))
+          state = State(
+            maybeDescription,
+            longitude,
+            latitude,
+            date,
+            past = false
           )
           _ <- Storage[F].save(state)
-          response <- schedule(ref, fibers, zoneId)
-          _ <- notifyPeers(Strings.Created, user)
+          users <- Storage[F].users
+          _ <- users.traverse(u =>
+            if (u.id === user.id) Storage[F].join(user.id)
+            else Storage[F].leave(u.id)
+          )
+          response <- schedule(fibers, zoneId, language)
+          _ <- for {
+            users <- Storage[F].users
+            state <- Storage[F].state
+            _ <- users.traverse { peer =>
+              if (peer.id != user.id) {
+                val message = language.created(user.username, state)
+                peer.send(message).void
+              } else
+                ().pure[F]
+            }
+          } yield ()
         } yield response
         run >>= (r => respond(user, r))
       }
 
-      def post(news: String): F[Unit] = {
-        import canoe.syntax._
-        import canoe.api._
+      def post(news: String): F[Unit] =
         for {
-          users <- Storage[F].restoreUsers
+          users <- Storage[F].users
           // TODO: Sometimes fails for unknown reasons
-          _ <- users.traverse {
-            case (c, _, _) =>
-              c.send(news)
-                .attempt
-                .map(_.fold(e => println(e.getMessage), _ => ()))
+          _ <- users.traverse { u =>
+            u.send(news)
+              .attempt
+              .map(_.fold(e => println(e.getMessage), _ => ()))
           }.void
         } yield ()
-      }
     }
 }

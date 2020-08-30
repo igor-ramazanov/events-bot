@@ -1,4 +1,4 @@
-package tech.igorramazanov.eventsbot
+package tech.igorramazanov.eventsbot.model
 
 import cats.instances.string._
 import cats.syntax.show._

@@ -5,18 +5,21 @@ import java.util.concurrent._
 import java.util.concurrent.atomic.AtomicInteger
 
 import canoe.api._
-import canoe.syntax._
 import canoe.api.models.Keyboard
 import canoe.methods.messages.ForwardMessage
 import canoe.models.messages.{TelegramMessage, TextMessage}
-import canoe.models.outgoing.LocationContent
 import canoe.models.{KeyboardButton, ReplyKeyboardMarkup}
+import canoe.syntax._
 import cats.effect._
 import cats.effect.concurrent.MVar
 import cats.implicits._
+import org.flywaydb.core.Flyway
 import org.slf4j.{Logger, LoggerFactory}
-import tech.igorramazanov.eventsbot.Command.commandShow
 import tech.igorramazanov.eventsbot.Utils._
+import tech.igorramazanov.eventsbot.i18n.Language
+import tech.igorramazanov.eventsbot.model._
+import tech.igorramazanov.eventsbot.model.Command.commandShow
+import tech.igorramazanov.eventsbot.storage.Storage
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
@@ -25,19 +28,17 @@ import scala.util.chaining._
 object Main extends IOApp {
   def threadFactory(name: String): ThreadFactory = {
     val counter = new AtomicInteger(0)
-    new ThreadFactory {
-      override def newThread(r: Runnable): Thread = {
-        val t = new Thread(r)
-        t.setName(name + "-" + counter.getAndIncrement())
-        t.setDaemon(false)
-        t.setUncaughtExceptionHandler((_: Thread, e: Throwable) =>
-          Thread.getDefaultUncaughtExceptionHandler match {
-            case null => e.printStackTrace()
-            case h    => h.uncaughtException(Thread.currentThread(), e)
-          }
-        )
-        t
-      }
+    (r: Runnable) => {
+      val t = new Thread(r)
+      t.setName(name + "-" + counter.getAndIncrement())
+      t.setDaemon(false)
+      t.setUncaughtExceptionHandler((_: Thread, e: Throwable) =>
+        Thread.getDefaultUncaughtExceptionHandler match {
+          case null => e.printStackTrace()
+          case h    => h.uncaughtException(Thread.currentThread(), e)
+        }
+      )
+      t
     }
   }
 
@@ -90,41 +91,56 @@ object Main extends IOApp {
     )
 
   val logger: Logger = LoggerFactory.getLogger(getClass)
-
-  val token: String = sys.env("EVENTS_BOT_TELEGRAM_TOKEN")
-  val zoneId: ZoneId = ZoneId.of(sys.env("EVENTS_BOT_TIMEZONE"))
-  val dataDir: String = sys.env("EVENTS_BOT_DATA_DIR")
-  val usersFile: String = dataDir + "/" + "users.txt"
-  val rejectedUsersFile: String = dataDir + "/" + "rejected_users.txt"
-  val stateFile: String = dataDir + "/" + "state.txt"
   val pollingPeriod: FiniteDuration = 1.second
 
   def validCommands: Expect[TextMessage] =
     textMessage.matching(Command.values.map(_.show).mkString("|"))
 
-  def run(args: List[String]): IO[ExitCode] =
-    TelegramClient[IO](token, blocker.blockingContext).use {
+  def runRdmbsMigrations[F[_]: Sync](database: String): F[Unit] =
+    Sync[F].delay {
+      Flyway
+        .configure()
+        .dataSource(s"jdbc:sqlite:$database", "", "")
+        .locations(
+          new org.flywaydb.core.api.Location("classpath:db/migration")
+        )
+        .load()
+        .migrate()
+    }.void
+
+  override def run(args: List[String]): IO[ExitCode] =
+    program[IO](
+      language = Language.Russian,
+      token = sys.env("EVENTS_BOT_TELEGRAM_TOKEN"),
+      database = sys.env("EVENTS_BOT_DATABASE"),
+      zoneId = ZoneId.of(sys.env("EVENTS_BOT_TIMEZONE"))
+    )
+
+  def program[F[_]: ContextShift: Timer](
+      language: Language,
+      token: String,
+      database: String,
+      zoneId: ZoneId
+  )(implicit
+      F: ConcurrentEffect[F]
+  ): F[ExitCode] =
+    TelegramClient[F](token, blocker.blockingContext).use {
       implicit telegramClient =>
         for {
-          _ <- IO(logger.info("Bot is starting"))
-          implicit0(storage: Storage[IO]) <-
-            Storage
-              .create[IO](
-                usersFile,
-                stateFile,
-                zoneId
-              )
-          state <- ioOp(storage.restoreState)
-          implicit0(eventService: EventService[IO]) <-
-            EventService.create[IO](state, zoneId)
-          channel <- MVar.empty[IO, (Boolean, Int)]
+          _ <- F.delay(logger.info("Bot is starting"))
+          _ <- runRdmbsMigrations[F](database)
+          implicit0(storage: Storage[F]) <- Storage(database, blocker)
+          state <- ioOp(storage.state)
+          implicit0(eventService: EventService[F]) <-
+            EventService.create[F](state, zoneId, Language.Russian)
+          channel <- MVar.empty[F, (Boolean, Int)]
           _ <-
             Bot
               .hook("https://igorramazanov.tech/events-bot")
               .use(
                 _.follow(
                   approvals(channel),
-                  handleUserCommands(channel)
+                  handleUserCommands(language, channel)
                 ).compile.drain
               )
         } yield ExitCode.Success
@@ -134,7 +150,7 @@ object Main extends IOApp {
       channel: MVar[F, (Boolean, Int)]
   ): Scenario[F, Unit] =
     for {
-      adminId <- Scenario.eval(ioOp(Storage[F].adminId))
+      adminId <- Scenario.eval(ioOp(Storage[F].admin)).map(_.id)
       (isApproved, id) <- Scenario.expect(
         textMessage
           .matching("(\\/yes_[0-9]+)|(\\/no_[0-9]+)")
@@ -159,6 +175,7 @@ object Main extends IOApp {
   def handleUserCommands[F[
       _
   ]: Timer: MonadThrowable: Storage: EventService: ContextShift](
+      language: Language,
       channel: MVar[F, (Boolean, Int)]
   )(implicit
       telegramClient: TelegramClient[F],
@@ -167,24 +184,29 @@ object Main extends IOApp {
     for {
       m <- Scenario.expect(validCommands)
       _ <- m.from.fold(Scenario.done[F]) { u =>
-        val sender =
-          User[F](
-            u.id,
-            u.fullName,
-            str => m.chat.send(str).attempt.void,
-            (longitude, latitude) =>
-              m.chat.send(LocationContent(latitude, longitude)).void
-          )
         for {
-          status <- Scenario.eval(ioOp(Storage[F].status(u)))
+          sender <-
+            Scenario
+              .eval(Storage[F].user(u.id))
+              .map(
+                _.getOrElse(
+                  User(
+                    u.id,
+                    u.firstName,
+                    u.username.getOrElse(""),
+                    User.Status.New,
+                    isParticipant = false
+                  )
+                )
+              )
           isAdmin <-
             Scenario
-              .eval(ioOp(Storage[F].adminId))
-              .map(adminId => sender.id === adminId)
+              .eval(ioOp(Storage[F].admin))
+              .map(admin => sender.id === admin.id)
           start =
             m.chat
               .send(
-                Strings.Greeting,
+                language.greeting,
                 keyboard = Keyboard.Reply(
                   ReplyKeyboardMarkup(
                     List(
@@ -212,14 +234,14 @@ object Main extends IOApp {
               .attempt
               .void
           signUp = u.username.fold(
-            Scenario.eval(m.chat.send(Strings.MustHavePublicUsername).void)
+            Scenario.eval(m.chat.send(language.publicUsernameRequirement).void)
           ) { username =>
-            status match {
-              case UserStatus.New =>
+            sender.status match {
+              case User.Status.New =>
                 Scenario
                   .eval(
                     m.chat.send(
-                      Strings.SignUp,
+                      language.signUp,
                       keyboard = Keyboard.Reply(
                         ReplyKeyboardMarkup.singleButton(
                           KeyboardButton.text(Command.Signup.show),
@@ -228,17 +250,18 @@ object Main extends IOApp {
                       )
                     ) >> ioOp(
                       Storage[F]
-                        .save(m.chat, u, UserStatus.WaitingConfirmation)
+                        .save(
+                          sender.copy(status = User.Status.WaitingConfirmation)
+                        )
                     )
                   )
-              case UserStatus.WaitingConfirmation
+              case User.Status.WaitingConfirmation
                   if Command
                     .withName(m.text.tail.capitalize) === Command.Signup =>
                 for {
-                  adminChat <- Scenario.eval(ioOp(Storage[F].adminChat))
-                  _ <- Scenario.eval(
-                    adminChat.send(Strings.Request(username, u.id))
-                  )
+                  admin <- Scenario.eval(ioOp(Storage[F].admin))
+                  _ <-
+                    Scenario.eval(admin.send(language.request(username, u.id)))
                   signedUp <- Scenario.eval(
                     (Timer[F].sleep(pollingPeriod) >> channel.read)
                       .iterateUntil(_._2 === u.id)
@@ -249,22 +272,26 @@ object Main extends IOApp {
                     if (signedUp)
                       Scenario.eval(for {
                         _ <- ioOp(
-                          Storage[F].save(m.chat, u, UserStatus.SignedIn)
+                          Storage[F].save(
+                            sender.copy(status = User.Status.SignedIn)
+                          )
                         )
                         _ <-
                           EventService[F]
                             .save(sender)
                         _ <-
                           m.chat
-                            .send(Strings.SignedUp)
+                            .send(language.signedUp)
                         _ <- EventService[F].show(sender)
                         _ <- start
                       } yield ())
                     else
                       Scenario.eval(
                         ioOp(
-                          Storage[F].save(m.chat, u, UserStatus.Rejected)
-                        ) >> m.chat.send(Strings.Rejected)
+                          Storage[F].save(
+                            sender.copy(status = User.Status.Rejected)
+                          )
+                        ) >> m.chat.send(language.rejected)
                       )
                 } yield ()
               case _ => Scenario.done[F]
@@ -280,36 +307,36 @@ object Main extends IOApp {
               Scenario.eval(start)
             case Command.Feedback =>
               for {
-                _ <- Scenario.eval(m.chat.send(Strings.Feedback))
+                _ <- Scenario.eval(m.chat.send(language.feedback))
                 feedback <- Scenario.expect(
                   PartialFunction
                     .fromFunction(identity[TelegramMessage])
                 )
-                adminChat <- Scenario.eval(ioOp(Storage[F].adminChat))
+                admin <- Scenario.eval(ioOp(Storage[F].admin))
                 _ <- Scenario.eval(
                   telegramClient.execute(
                     ForwardMessage(
-                      adminChat.id,
+                      admin.id,
                       feedback.chat.id,
                       feedback.messageId
                     )
                   )
                 )
-                _ <- Scenario.eval(m.chat.send(Strings.FeedbackConfirmation))
+                _ <- Scenario.eval(m.chat.send(language.feedbackConfirmation))
               } yield ()
             case Command.Delete =>
               Scenario
                 .eval(
                   EventService[F].delete(sender) >>
-                    ioOp(ioOp(Storage[F].delete(u))) >>
-                    m.chat.send(Strings.Deleted).void
+                    ioOp(ioOp(Storage[F].delete(u.id))) >>
+                    m.chat.send(language.deleted).void
                 )
             case Command.Garden =>
               for {
                 _ <- Scenario.eval(
                   m.chat
                     .send(
-                      Strings.GardenerNewcomer,
+                      language.gardenNewcomer,
                       keyboard = Keyboard.Reply(
                         ReplyKeyboardMarkup(
                           List(
@@ -330,10 +357,10 @@ object Main extends IOApp {
               Scenario.eval(EventService[F].leave(sender))
             case Command.Create =>
               for {
-                _ <- Scenario.eval(m.chat.send(Strings.When).attempt)
+                _ <- Scenario.eval(m.chat.send(language.when).attempt)
                 (hh, mm) <- Scenario.expect(
                   textMessage
-                    .matching(Strings.WhenRegex)
+                    .matching(language.whenRegex)
                     .andThen(_.text.pipe { text =>
                       val s"$hh:$mm" = text
                       val hours = hh.toInt
@@ -343,7 +370,7 @@ object Main extends IOApp {
                 )
                 _ <- Scenario.eval(
                   m.chat.send(
-                    Strings.Description,
+                    language.description,
                     keyboard = Keyboard.Reply(
                       ReplyKeyboardMarkup.singleButton(
                         KeyboardButton.text("/no_descriprion")
@@ -359,7 +386,7 @@ object Main extends IOApp {
                       case s                 => s.some
                     })
                 )
-                _ <- Scenario.eval(m.chat.send(Strings.Where).attempt)
+                _ <- Scenario.eval(m.chat.send(language.where).attempt)
                 place <- Scenario.expect(location)
                 _ <- Scenario.eval(
                   EventService[F]
@@ -378,7 +405,7 @@ object Main extends IOApp {
               for {
                 _ <- Scenario.eval(
                   m.chat.send(
-                    Strings.PrepareNews,
+                    language.newsPrepare,
                     keyboard = Keyboard.Reply(
                       ReplyKeyboardMarkup(
                         List(
@@ -398,11 +425,12 @@ object Main extends IOApp {
               } yield ()
             case _ => Scenario.done[F]
           }
-          _ <- status match {
-            case UserStatus.New | UserStatus.WaitingConfirmation => signUp
-            case UserStatus.SignedIn | UserStatus.Admin          => program
-            case UserStatus.Rejected =>
-              Scenario.eval(m.chat.send(Strings.Rejected).void)
+          _ <- sender.status match {
+            case User.Status.New | User.Status.WaitingConfirmation =>
+              signUp
+            case User.Status.SignedIn | User.Status.Admin => program
+            case User.Status.Rejected =>
+              Scenario.eval(m.chat.send(language.rejected).void)
             case _ => Scenario.done[F]
           }
         } yield ()
