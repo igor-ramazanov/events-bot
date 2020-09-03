@@ -8,12 +8,15 @@ import canoe.api._
 import cats.effect._
 import cats.effect.concurrent.MVar
 import cats.implicits._
+import cats.effect.implicits._
 import org.flywaydb.core.Flyway
 import tech.igorramazanov.eventsbot.Utils.ioOp
-import tech.igorramazanov.eventsbot.i18n.Language
+import tech.igorramazanov.eventsbot.ui.i18n.I18N
+import tech.igorramazanov.eventsbot.service.{EventService, NewsService}
 import tech.igorramazanov.eventsbot.storage.Storage
 
 import scala.concurrent.ExecutionContext
+import scala.concurrent.duration._
 
 object Main extends IOApp {
   protected val debug: Boolean = sys.props.get("debug").contains("true")
@@ -66,7 +69,7 @@ object Main extends IOApp {
 
   override def run(args: List[String]): IO[ExitCode] =
     program[IO](
-      language = Language.Russian,
+      i18n = I18N.Russian,
       token = sys.env("EVENTS_BOT_TELEGRAM_TOKEN"),
       database = sys.env("EVENTS_BOT_DATABASE"),
       zoneId = ZoneId.of(sys.env("EVENTS_BOT_TIMEZONE"))
@@ -89,33 +92,46 @@ object Main extends IOApp {
   }
   // `-Ddebug=true` when curious about how threading works
 
-  private def program[F[_]: ContextShift: Timer](
-      language: Language,
+  private def program[F[_]: ContextShift: Timer: ConcurrentEffect](
+      i18n: I18N,
       token: String,
       database: String,
       zoneId: ZoneId
-  )(implicit
-      F: ConcurrentEffect[F]
   ): F[ExitCode] =
     TelegramClient[F](token, blocker.blockingContext).use {
       implicit telegramClient =>
         for {
           _ <- runRdmbsMigrations[F](database)
           implicit0(storage: Storage[F]) <- Storage(database, blocker)
-          state <- ioOp(storage.state)
+          state <- ioOp(storage.event)
           implicit0(eventService: EventService[F]) <-
-            EventService.create[F](state, zoneId, Language.Russian)
+            EventService.create[F](state, zoneId, I18N.Russian)
+          _ <- runPeriodicEventChecks[F](zoneId, i18n).start
+          implicit0(newsService: NewsService[F]) = NewsService.create[F]
           channel <- MVar.empty[F, (Boolean, Int)]
           _ <-
             Bot
               .hook("https://igorramazanov.tech/events-bot")
               .use(
                 _.follow(
-                  TelegramMessagesHandler.handlers(language, channel): _*
+                  TelegramMessagesHandler
+                    .handlers(i18n, channel, zoneId): _*
                 ).compile.drain
               )
         } yield ExitCode.Success
     }
+
+  private def runPeriodicEventChecks[F[
+      _
+  ]: Timer: ConcurrentEffect: EventService](
+      zoneId: ZoneId,
+      i18n: I18N
+  ): F[Unit] =
+    for {
+      _ <- Timer[F].sleep(1.second)
+      _ <- EventService[F].checkIfEventTime(zoneId, i18n)
+      _ <- runPeriodicEventChecks[F](zoneId, i18n)
+    } yield ()
 
   private def runRdmbsMigrations[F[_]: Sync](database: String): F[Unit] =
     Sync[F].delay {

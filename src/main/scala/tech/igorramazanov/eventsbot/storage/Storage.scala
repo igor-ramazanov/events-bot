@@ -5,10 +5,12 @@ import cats.implicits._
 import doobie._
 import doobie.implicits._
 import simulacrum.typeclass
-import tech.igorramazanov.eventsbot.model.{State, User}
+import tech.igorramazanov.eventsbot.model.{Event, Garden, User}
 
 @typeclass trait Storage[F[_]] {
   def save(u: User): F[Unit]
+  def save(g: Garden): F[Unit]
+  def garden: F[Garden]
   def user(id: Int): F[Option[User]]
   def users: F[List[User]]
   def participants: F[List[User]]
@@ -16,8 +18,8 @@ import tech.igorramazanov.eventsbot.model.{State, User}
   def leave(id: Int): F[Unit]
   def admin: F[User]
   def delete(id: Int): F[Unit]
-  def save(s: State): F[Unit]
-  def state: F[State]
+  def save(e: Event): F[Unit]
+  def event: F[Event]
 }
 
 object Storage {
@@ -74,17 +76,29 @@ object Storage {
         override def delete(id: Int): F[Unit] =
           sql"DELETE FROM user WHERE id=$id".update.run.transact(xa).void
 
-        override def save(s: State): F[Unit] = {
+        override def save(e: Event): F[Unit] = {
           val tx = for {
-            _ <- sql"DELETE FROM state".update.run
+            _ <- sql"DELETE FROM event".update.run
             _ <-
-              sql"INSERT INTO state VALUES (${s.description}, ${s.longitude}, ${s.latitude}, ${s.when.toString}, ${s.past})".update.run
+              sql"INSERT INTO event VALUES (${e.description}, ${e.longitude}, ${e.latitude}, ${e.when.toString}, ${e.past}, ${e.needsReminding})".update.run
           } yield ()
           tx.transact(xa)
         }
 
-        override def state: F[State] =
-          sql"SELECT * FROM state".query[State].unique.transact(xa)
+        override def event: F[Event] =
+          sql"SELECT * FROM event".query[Event].unique.transact(xa)
+
+        override def save(g: Garden): F[Unit] = {
+          val tx = for {
+            _ <- sql"DELETE FROM garden".update.run
+            _ <-
+              sql"INSERT INTO garden VALUES (${g.lastWatering.toString}, ${g.nextWatering.toString})".update.run
+          } yield ()
+          tx.transact(xa)
+        }
+
+        override def garden: F[Garden] =
+          sql"SELECT * FROM event".query[Garden].unique.transact(xa)
       }
     }
 }

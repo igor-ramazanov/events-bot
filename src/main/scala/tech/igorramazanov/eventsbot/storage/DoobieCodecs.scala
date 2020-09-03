@@ -3,16 +3,17 @@ package tech.igorramazanov.eventsbot.storage
 import java.time.ZonedDateTime
 
 import doobie._
-import tech.igorramazanov.eventsbot.model.{State, User}
+import tech.igorramazanov.eventsbot.model.{Event, Garden, User}
 
 trait DoobieCodecs {
+
   implicit protected val readUser: Read[User] =
     Read[
       (
           Int,
           String,
           String,
-          Int,
+          String,
           Boolean
       )
     ].map {
@@ -27,19 +28,30 @@ trait DoobieCodecs {
           id,
           firstName,
           username,
-          User.Status(status),
+          User.Status.withName(status),
           isParticipant
         )
     }
-  implicit protected val readState: Read[State] =
-    Read[(Option[String], Double, Double, String, Boolean)].map {
-      case (description, longitude, latitude, when, past) =>
-        State(
+
+  implicit protected val readEvent: Read[Event] =
+    Read[(Option[String], Double, Double, String, Boolean, Boolean)].map {
+      case (description, longitude, latitude, when, past, needsReminding) =>
+        Event(
           description,
           longitude,
           latitude,
           ZonedDateTime.parse(when),
-          past
+          past,
+          needsReminding
+        )
+    }
+
+  implicit protected val readGarden: Read[Garden] =
+    Read[(String, String)].map {
+      case (lastWatering, nextWatering) =>
+        Garden(
+          ZonedDateTime.parse(lastWatering),
+          ZonedDateTime.parse(nextWatering)
         )
     }
 }

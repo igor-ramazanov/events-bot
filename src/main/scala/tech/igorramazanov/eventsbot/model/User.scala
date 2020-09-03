@@ -11,8 +11,7 @@ final case class User(
 object User {
   object Status extends Enumeration {
     type Status = Value
-    val New, SignedIn, WaitingConfirmation, Rejected, Admin,
-        PersistentGardener =
-      Value
+    val New, SignedIn, WaitingConfirmation, Rejected, Admin, PersistentGardener,
+        OneTimeGardener = Value
   }
 }

@@ -1,13 +1,13 @@
-package tech.igorramazanov.eventsbot.i18n
+package tech.igorramazanov.eventsbot.ui.i18n
 
 import java.time.format.DateTimeFormatter
 
 import tech.igorramazanov.eventsbot.model._
 
-trait Language {
+trait I18N {
   val whenRegex = "([01][0-9]|2[0-3]):([0-5][0-9])"
-  def state(state: State, ps: List[User]): String
-  def created(originator: String, state: State): String
+  def event(event: Event, ps: List[User]): String
+  def created(originator: String, event: Event): String
   def signUp: String
   def request(username: String, id: Int): String
   def approved: String
@@ -28,29 +28,29 @@ trait Language {
   def notifyLeaving(username: String, participants: List[User]): String
   def notifyJoining(username: String, participants: List[User]): String
   def reminder: String
-  def start(state: State, participants: List[User]): String
+  def start(event: Event, participants: List[User]): String
   def newsPrepare: String
   def gardenNewcomer: String
 }
 
-object Language {
-  object Russian extends Language {
+object I18N {
+  object Russian extends I18N {
 
-    def state(state: State, participants: List[User]): String =
-      if (state.past)
+    def event(event: Event, participants: List[User]): String =
+      if (event.past)
         s"Она уже прошла :( Создашь новую? /create"
       else {
-        val when = state.when.format(DateTimeFormatter.ofPattern("HH:mm"))
+        val when = event.when.format(DateTimeFormatter.ofPattern("HH:mm"))
         val description =
-          state.description.fold("Встреча на свободную тему.")("Описание: " + _)
+          event.description.fold("Встреча на свободную тему.")("Описание: " + _)
         val names = participants.map(_.username).mkString(", ")
         s"""|Время следующей встречи: $when.
            |Участники: $names.
            |$description""".stripMargin
       }
 
-    def created(originator: String, state: State): String =
-      s"$originator создал(а) новую встречу в ${state.when.format(DateTimeFormatter.ofPattern("HH:mm"))}. Подробнее: /show"
+    def created(originator: String, event: Event): String =
+      s"$originator создал(а) новую встречу в ${event.when.format(DateTimeFormatter.ofPattern("HH:mm"))}. Подробнее: /show"
 
     val signUp: String =
       "Нажмите на кнопку, чтобы зарегистрироваться и админ проверит вашу заявку.\nДля проверки необходимо иметь публичный @username."
@@ -120,10 +120,10 @@ object Language {
 
     val reminder = "Встречаемся через 5 минут! "
 
-    def start(state: State, participants: List[User]): String = {
+    def start(event: Event, participants: List[User]): String = {
       val names = participants.map(_.username).mkString
       val description =
-        state.description.fold("Встреча на свободную тему.")("Описание: " + _)
+        event.description.fold("Встреча на свободную тему.")("Описание: " + _)
       s"""|Итак, время встречи.
          |И, ребята, я крайне рекомендую приходить в масках, чтобы минизировать вероятность заражения, пока люди все еще болеют коронавирусом.
          |Участники: $names

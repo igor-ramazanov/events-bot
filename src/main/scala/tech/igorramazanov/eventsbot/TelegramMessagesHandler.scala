@@ -1,5 +1,7 @@
 package tech.igorramazanov.eventsbot
 
+import java.time.ZoneId
+
 import canoe.api._
 import canoe.api.models.Keyboard
 import canoe.methods.messages.ForwardMessage
@@ -10,24 +12,30 @@ import cats.effect._
 import cats.effect.concurrent.MVar
 import cats.implicits._
 import tech.igorramazanov.eventsbot.Utils.{ioOp, _}
-import tech.igorramazanov.eventsbot.i18n.Language
+import tech.igorramazanov.eventsbot.ui.i18n.I18N
 import tech.igorramazanov.eventsbot.model.Command.commandShow
 import tech.igorramazanov.eventsbot.model._
+import tech.igorramazanov.eventsbot.service.{EventService, NewsService}
 import tech.igorramazanov.eventsbot.storage.Storage
 
 import scala.concurrent.duration._
 import scala.util.chaining._
 
+//TODO: Define new 'Screen' state-machine like abstraction
 object TelegramMessagesHandler {
   private val pollingPeriod: FiniteDuration = 1.second
 
   def handlers[F[
       _
-  ]: TelegramClient: MonadThrowable: Storage: ContextShift: Timer: EventService](
-      language: Language,
-      channel: MVar[F, (Boolean, Int)]
+  ]: TelegramClient: MonadThrowable: Storage: ContextShift: Timer: EventService: NewsService](
+      language: I18N,
+      channel: MVar[F, (Boolean, Int)],
+      zoneId: ZoneId
   )(implicit blocker: Blocker): List[Scenario[F, Unit]] =
-    List(approvals[F](channel), handleUserCommands[F](language, channel))
+    List(
+      approvals[F](channel),
+      handleUserCommands[F](language, channel, zoneId)
+    )
 
   private def approvals[F[
       _
@@ -62,9 +70,10 @@ object TelegramMessagesHandler {
 
   private def handleUserCommands[F[
       _
-  ]: Timer: MonadThrowable: Storage: EventService: ContextShift](
-      language: Language,
-      channel: MVar[F, (Boolean, Int)]
+  ]: Timer: MonadThrowable: Storage: EventService: NewsService: ContextShift](
+      language: I18N,
+      channel: MVar[F, (Boolean, Int)],
+      zoneId: ZoneId
   )(implicit
       telegramClient: TelegramClient[F],
       blocker: Blocker
@@ -164,9 +173,7 @@ object TelegramMessagesHandler {
                             sender.copy(status = User.Status.SignedIn)
                           )
                         )
-                        _ <-
-                          EventService[F]
-                            .save(sender)
+                        _ <- Storage[F].save(sender)
                         _ <-
                           m.chat
                             .send(language.signedUp)
@@ -186,11 +193,11 @@ object TelegramMessagesHandler {
             }
           }
 
-          program = Command.withName(m.text.tail.capitalize) match {
+          main = Command.withName(m.text.tail.capitalize) match {
             case Command.Show =>
               Scenario.eval(EventService[F].show(sender))
             case Command.Join =>
-              Scenario.eval(EventService[F].join(sender))
+              Scenario.eval(EventService[F].join(sender, zoneId))
             case Command.Start | Command.Help =>
               Scenario.eval(start)
             case Command.Feedback =>
@@ -215,8 +222,7 @@ object TelegramMessagesHandler {
             case Command.Delete =>
               Scenario
                 .eval(
-                  EventService[F].delete(sender) >>
-                    ioOp(ioOp(Storage[F].delete(u.id))) >>
+                  ioOp(ioOp(Storage[F].delete(u.id))) >>
                     m.chat.send(language.deleted).void
                 )
             case Command.Garden =>
@@ -309,14 +315,14 @@ object TelegramMessagesHandler {
                 t <- Scenario.expect(text)
                 _ <-
                   Scenario
-                    .eval(EventService[F].post(t))
+                    .eval(NewsService[F].post(t))
               } yield ()
             case _ => Scenario.done[F]
           }
           _ <- sender.status match {
             case User.Status.New | User.Status.WaitingConfirmation =>
               signUp
-            case User.Status.SignedIn | User.Status.Admin => program
+            case User.Status.SignedIn | User.Status.Admin => main
             case User.Status.Rejected =>
               Scenario.eval(m.chat.send(language.rejected).void)
             case _ => Scenario.done[F]
